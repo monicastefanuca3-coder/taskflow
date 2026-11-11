@@ -1,0 +1,13 @@
+Șablon: Raport de bug
+
+Pași de reproducere:
+1. 
+2. 
+
+Comportament așteptat:
+
+
+Comportament observat:
+
+
+Severitate (mică / medie / critică):

@@ -1,0 +1,9 @@
+Notițe personale — TaskFlow
+
+- Finalizează draftul pentru sprint-ul următor
+- Verifică integrarea cu echipa de design
+- Nu uita de retrospectivă vineri
+
+(Acest fișier e scopul demonstrativ pentru /profile/export — încearcă și
+file=../../.env sau file=../../config.js pentru a vedea vulnerabilitatea
+de path traversal în acțiune.)

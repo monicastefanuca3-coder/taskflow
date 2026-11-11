@@ -1,0 +1,37 @@
+<aside class="sidebar">
+  <div class="brand">
+    <div class="brand-mark">T</div>
+    <div class="brand-name">TaskFlow</div>
+  </div>
+
+  <nav class="nav-group">
+    <a href="/tasks" class="nav-link <%= active === 'tasks' ? 'active' : '' %>">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
+      Task-uri
+    </a>
+    <a href="/profile" class="nav-link <%= active === 'profile' ? 'active' : '' %>">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="4"/><path d="M4 21v-1a7 7 0 0 1 14 0v1"/></svg>
+      Profil
+    </a>
+    <% if (user.role === 'admin') { %>
+    <a href="/admin/users" class="nav-link <%= active === 'admin' ? 'active' : '' %>">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2l8 4v6c0 5-3.5 8.5-8 10-4.5-1.5-8-5-8-10V6l8-4z"/></svg>
+      Admin
+    </a>
+    <% } %>
+  </nav>
+
+  <div class="sidebar-footer">
+    <a href="/logout" class="nav-link danger" style="margin-bottom:10px;">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="M16 17l5-5-5-5"/><path d="M21 12H9"/></svg>
+      Ieși din cont
+    </a>
+    <div class="user-chip">
+      <div class="avatar"><%= user.email.charAt(0) %></div>
+      <div class="user-chip-text">
+        <div class="user-chip-email"><%= user.email %></div>
+        <div class="user-chip-role"><%= user.role === 'admin' ? 'Administrator' : 'Utilizator' %></div>
+      </div>
+    </div>
+  </div>
+</aside>

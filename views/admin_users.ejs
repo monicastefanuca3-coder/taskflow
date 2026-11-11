@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="ro">
+<head><%- include('partials/head', { pageTitle: 'Admin' }) %></head>
+<body>
+  <div class="app">
+    <%- include('partials/sidebar', { user: user, active: 'admin' }) %>
+
+    <main class="main">
+      <div class="content">
+        <div class="page-header">
+          <div>
+            <h2>Utilizatori</h2>
+            <p>Toți utilizatorii înregistrați în TaskFlow.</p>
+          </div>
+        </div>
+
+        <div class="card" style="margin-bottom:20px;">
+          <h3 style="margin-top:0;">Adaugă utilizator</h3>
+          <form method="POST" action="/admin/users">
+            <div class="field-row">
+              <div>
+                <label>Email</label>
+                <input type="text" name="email" placeholder="utilizator@taskflow.local" required>
+              </div>
+              <div>
+                <label>Parolă</label>
+                <input type="password" name="password" placeholder="parolă" required>
+              </div>
+              <div>
+                <label>Rol</label>
+                <select name="role">
+                  <option value="user">user</option>
+                  <option value="admin">admin</option>
+                </select>
+              </div>
+            </div>
+            <button type="submit">Adaugă utilizator</button>
+          </form>
+        </div>
+
+        <div class="card" style="padding:8px 20px;">
+          <table>
+            <thead>
+              <tr><th>ID</th><th>Email</th><th>Rol</th><th>Hash parolă</th><th></th><th></th></tr>
+            </thead>
+            <tbody>
+              <% users.forEach(function(u) { %>
+              <tr>
+                <td class="muted-small">#<%= u.id %></td>
+                <td style="font-weight:600;"><%= u.email %></td>
+                <td><span class="badge <%= u.role === 'admin' ? 'badge-admin' : 'badge-user' %>"><%= u.role %></span></td>
+                <td><code><%= u.password %></code></td>
+                <td>
+                  <form method="POST" action="/admin/users/<%= u.id %>/role">
+                    <select name="role" onchange="this.form.submit()">
+                      <option value="user" <%= u.role==='user' ? 'selected' : '' %>>user</option>
+                      <option value="admin" <%= u.role==='admin' ? 'selected' : '' %>>admin</option>
+                    </select>
+                  </form>
+                </td>
+                <td>
+                  <form method="POST" action="/admin/users/<%= u.id %>/delete" onsubmit="return confirm('Ștergi definitiv acest utilizator?');">
+                    <button type="submit" class="danger small">Șterge</button>
+                  </form>
+                </td>
+              </tr>
+              <% }); %>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </main>
+  </div>
+</body>
+</html>

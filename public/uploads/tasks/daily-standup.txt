@@ -1,0 +1,10 @@
+Șablon: Daily standup
+
+Ce am făcut ieri:
+- 
+
+Ce fac azi:
+- 
+
+Blocaje:
+- 

@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="ro">
+<head><%- include('partials/head', { pageTitle: task.title }) %></head>
+<body>
+  <div class="app">
+    <%- include('partials/sidebar', { user: user, active: 'tasks' }) %>
+
+    <main class="main">
+      <div class="content">
+        <a href="/tasks" class="muted-small" style="display:inline-flex; align-items:center; gap:6px; margin-bottom:16px;">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 12H5"/><path d="M12 19l-7-7 7-7"/></svg>
+          Înapoi la task-uri
+        </a>
+
+        <div class="card">
+          <div class="row-between" style="align-items:flex-start;">
+            <%- include('partials/status_quick', { task: task }) %>
+            <div style="display:flex; gap:8px;">
+              <a href="/tasks/<%= task.id %>/export" class="btn secondary small">Exportă</a>
+              <a href="/tasks/<%= task.id %>/edit" class="btn secondary small">Editează</a>
+            </div>
+          </div>
+          <h2 style="margin-top:14px;"><%= task.title %></h2>
+          <span class="badge <%= task.status === 'done' ? 'badge-done' : (task.status === 'in-progress' ? 'badge-progress' : 'badge-open') %>"><%= task.status %></span>
+          <p style="margin-top:10px;"><%= task.description %></p>
+        </div>
+
+        <h3>Comentarii (<%= comments.length %>)</h3>
+        <% if (comments.length === 0) { %>
+          <div class="empty-state">Niciun comentariu încă.</div>
+        <% } else { %>
+          <% comments.forEach(function(c) { %>
+            <!-- notă: body-ul comentariului e redat intenționat neescapat (demo XSS stocat) -->
+            <div class="comment row-between" style="align-items:flex-start;">
+              <div>
+                <span class="comment-author"><%= c.author %></span>
+                <span class="comment-body"><%- c.body %></span>
+              </div>
+              <form method="POST" action="/tasks/<%= task.id %>/comments/<%= c.id %>/delete" onsubmit="return confirm('Ștergi acest comentariu?');">
+                <button type="submit" class="ghost small" title="Șterge comentariul" style="color:var(--danger); padding:2px 8px;">✕</button>
+              </form>
+            </div>
+          <% }); %>
+        <% } %>
+
+        <div class="card" style="margin-top:18px;">
+          <form method="POST" action="/tasks/<%= task.id %>/comments">
+            <label>Adaugă un comentariu</label>
+            <textarea name="body" placeholder="Scrie un comentariu..." required></textarea>
+            <button type="submit">Trimite</button>
+          </form>
+        </div>
+
+
+      </div>
+    </main>
+  </div>
+</body>
+</html>

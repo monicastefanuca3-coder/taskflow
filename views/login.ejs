@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="ro">
+<head><%- include('partials/head', { pageTitle: 'Autentificare' }) %></head>
+<body>
+  <div class="auth-wrap">
+    <div class="auth-card">
+      <div class="auth-brand">
+        <div class="brand-mark">T</div>
+        <div class="brand-name">TaskFlow</div>
+      </div>
+      <h2 class="auth-title">Bine ai revenit</h2>
+      <p class="auth-subtitle">Autentifică-te pentru a-ți vedea task-urile</p>
+
+      <% if (error) { %>
+        <div class="alert alert-error">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+          <%= error %>
+        </div>
+      <% } %>
+
+      <form method="POST" action="/login">
+        <label>Email</label>
+        <input type="text" name="email" placeholder="tu@companie.ro" required autofocus>
+        <label>Parolă</label>
+        <input type="password" name="password" placeholder="••••••••" required>
+        <button type="submit" class="full">Intră în cont</button>
+      </form>
+
+      <div class="auth-switch">Nu ai cont? <a href="/register">Înregistrează-te</a></div>
+    </div>
+  </div>
+</body>
+</html>

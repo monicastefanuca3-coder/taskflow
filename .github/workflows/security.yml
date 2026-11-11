@@ -1,0 +1,157 @@
+name: Security Pipeline
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+
+  # ---------------------------------------------------------------
+  # 1) SECRET SCANNING — TruffleHog
+  # ---------------------------------------------------------------
+  secret-scan:
+    name: Secret Scanning (TruffleHog)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # istoricul complet, nu doar ultimul commit
+
+      - name: TruffleHog — scanează tot repo-ul (inclusiv istoricul)
+        uses: trufflesecurity/trufflehog@main
+        with:
+          path: .
+          base: ""
+          head: HEAD
+          extra_args: --debug
+        # notă: NU folosim --only-verified aici. Secretele din acest proiect (chei
+        # AWS/Stripe/SendGrid în .env și config.js) sunt false, deci TruffleHog nu le poate
+        # "verifica" live contra API-urilor reale — cu --only-verified job-ul ar ieși curat
+        # din greșeală (fals negativ). Vrem toate potrivirile, verificate sau nu.
+
+  # ---------------------------------------------------------------
+  # 2) SCA — dependențe (npm audit + Trivy filesystem)
+  # ---------------------------------------------------------------
+  sca-dependencies:
+    name: SCA — Dependențe (npm audit + Trivy)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 18
+          cache: npm
+
+      - name: Instalează dependențele (generează package-lock.json)
+        run: npm install
+
+      - name: npm audit
+        run: npm audit --audit-level=low || true
+        # || true: nu blocăm pipeline-ul pe acest job-demo; într-un proiect real ai seta
+        # un prag strict (ex: fail pe severitate high/critical) ca poartă de calitate reală.
+
+      - name: Trivy — scanare filesystem (dependențe + secrete + fișiere de configurare)
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: fs
+          scan-ref: .
+          scanners: vuln,secret,misconfig
+          format: table
+          exit-code: '0'
+
+  # ---------------------------------------------------------------
+  # 3) SCA — imaginea Docker (Trivy image scan)
+  # ---------------------------------------------------------------
+  sca-container:
+    name: SCA — Imagine Docker (Trivy)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build imagine Docker
+        run: docker build -t taskflow:scan .
+
+      - name: Trivy — scanare imagine
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: taskflow:scan
+          format: table
+          exit-code: '0'
+          severity: 'MEDIUM,HIGH,CRITICAL'
+
+  # ---------------------------------------------------------------
+  # 4) SAST — SonarQube
+  # ---------------------------------------------------------------
+  sast:
+    name: SAST (SonarQube)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: SonarQube Scan
+        uses: sonarsource/sonarqube-scan-action@v2
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
+        # citește automat sonar-project.properties din rădăcina repo-ului.
+        # fără SONAR_TOKEN/SONAR_HOST_URL setate în Settings → Secrets, acest job eșuează —
+        # vezi PIPELINE.md pentru cum le configurezi (server propriu sau SonarCloud).
+
+  # ---------------------------------------------------------------
+  # 5) DAST — OWASP ZAP, rulat contra aplicației pornite efectiv
+  # ---------------------------------------------------------------
+  dast:
+    name: DAST (OWASP ZAP)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 18
+          cache: npm
+
+      - name: Instalează dependențele
+        run: npm install
+
+      - name: Pornește aplicația pe fundal
+        run: |
+          nohup node server.js > app.log 2>&1 &
+          npx wait-on http://localhost:3000/health --timeout 30000
+        # .env e deja în repo (intenționat, pentru demo-ul de secret scanning), deci
+        # dotenv îl încarcă automat — nu trebuie creat sau copiat nimic suplimentar aici.
+
+      - name: ZAP Baseline Scan
+        uses: zaproxy/action-baseline@v0.12.0
+        with:
+          target: 'http://localhost:3000/login'
+          rules_file_name: ''
+          cmd_options: '-a'
+          allow_issue_writing: false
+
+      - name: Afișează log-ul aplicației (debugging, dacă DAST eșuează)
+        if: failure()
+        run: cat app.log
+
+  # ---------------------------------------------------------------
+  # 6) Sumar — rulează după toate etapele, doar ca punct de verificare
+  # ---------------------------------------------------------------
+  summary:
+    name: Sumar pipeline
+    runs-on: ubuntu-latest
+    needs: [secret-scan, sca-dependencies, sca-container, sast, dast]
+    if: always()
+    steps:
+      - name: Afișează rezultatul fiecărei etape
+        run: |
+          echo "secret-scan:      ${{ needs.secret-scan.result }}"
+          echo "sca-dependencies: ${{ needs.sca-dependencies.result }}"
+          echo "sca-container:    ${{ needs.sca-container.result }}"
+          echo "sast:             ${{ needs.sast.result }}"
+          echo "dast:             ${{ needs.dast.result }}"

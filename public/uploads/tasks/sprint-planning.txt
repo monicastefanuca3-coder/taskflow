@@ -1,0 +1,12 @@
+Șablon: Planificare sprint
+
+Obiectivul sprintului:
+- 
+
+Task-uri incluse:
+1. 
+2. 
+3. 
+
+Riscuri/blocaje cunoscute:
+- 

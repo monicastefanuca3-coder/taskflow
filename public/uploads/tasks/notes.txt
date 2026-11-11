@@ -1,0 +1,1 @@
+Notă atașată task-ului: verifică integrarea API înainte de demo.

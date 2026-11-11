@@ -1,0 +1,44 @@
+stages:
+  - secret-scan
+  - sca
+  - sast
+  - dast
+
+trufflehog:
+  stage: secret-scan
+  image: trufflesecurity/trufflehog:latest
+  script:
+    - trufflehog filesystem . --only-verified=false
+
+npm-audit:
+  stage: sca
+  image: node:18
+  script:
+    - npm install --package-lock-only
+    - npm audit --audit-level=low || true
+
+trivy-fs:
+  stage: sca
+  image: aquasec/trivy:latest
+  script:
+    - trivy fs --exit-code 0 --format table .
+
+sonarqube:
+  stage: sast
+  image: sonarsource/sonar-scanner-cli:latest
+  variables:
+    SONAR_HOST_URL: "$SONAR_HOST_URL"
+    SONAR_TOKEN: "$SONAR_TOKEN"
+  script:
+    - sonar-scanner
+
+zap-baseline:
+  stage: dast
+  image: node:18
+  services: []
+  before_script:
+    - npm install
+    - nohup node server.js &
+    - sleep 5
+  script:
+    - docker run --network host -t zaproxy/zap-stable zap-baseline.py -t http://localhost:3000/login -a || true
