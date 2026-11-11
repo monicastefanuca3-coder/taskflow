@@ -114,7 +114,10 @@ jobs:
           cache: npm
 
       - name: Instalează dependențele
-        run: npm install
+        run: |
+          rm -rf node_modules
+          npm install
+          npm rebuild sqlite3 --build-from-source
 
       - name: Pornește aplicația pe fundal
         run: |
