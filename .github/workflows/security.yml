@@ -127,7 +127,7 @@ jobs:
         # dotenv îl încarcă automat — nu trebuie creat sau copiat nimic suplimentar aici.
 
       - name: ZAP Baseline Scan
-        uses: zaproxy/action-baseline@v0.12.0
+        uses: zaproxy/action-baseline@v0.15.0
         with:
           target: 'http://localhost:3000/login'
           rules_file_name: ''
