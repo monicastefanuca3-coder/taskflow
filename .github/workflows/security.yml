@@ -20,13 +20,9 @@ jobs:
         with:
           fetch-depth: 0   # istoricul complet, nu doar ultimul commit
 
-      - name: TruffleHog — scanează tot repo-ul (inclusiv istoricul)
-        uses: trufflesecurity/trufflehog@main
-        with:
-          path: .
-          base: ""
-          head: HEAD
-          extra_args: --debug
+      - name: TruffleHog — scanează tot repo-ul
+        run: |
+          docker run --rm -v "$PWD:/repo" trufflesecurity/trufflehog:latest filesystem /repo
         # notă: NU folosim --only-verified aici. Secretele din acest proiect (chei
         # AWS/Stripe/SendGrid în .env și config.js) sunt false, deci TruffleHog nu le poate
         # "verifica" live contra API-urilor reale — cu --only-verified job-ul ar ieși curat
