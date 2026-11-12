@@ -1,40 +1,132 @@
 const express = require('express');
 const router = express.Router();
-const request = require('request');
 const path = require('path');
 const fs = require('fs');
+const dns = require('dns').promises;
+const net = require('net');
 const { db } = require('../db');
 const config = require('../config');
+
+const STATUSES = ['open', 'in-progress', 'done'];
+const TEMPLATES = ['sprint-planning.txt', 'bug-report.txt', 'daily-standup.txt', 'retro.txt'];
+const templatesDir = path.join(config.uploadsDir, 'tasks');
 
 function requireLogin(req, res, next) {
   if (!req.session.user) return res.redirect('/login');
   next();
 }
 
-// Folderul cu șabloanele predefinite de notițe (puse de aplicație, nu încărcate de utilizatori)
-const templatesDir = path.join(config.uploadsDir, 'tasks');
+function dbFail(res, err) {
+  console.error(err);
+  return res.status(500).send('Eroare internă');
+}
+
+// id-urile din URL trebuie să fie numere
+router.param('id', (req, res, next, value) => {
+  if (!/^\d+$/.test(value)) return res.status(404).send('Negăsit');
+  next();
+});
+router.param('commentId', (req, res, next, value) => {
+  if (!/^\d+$/.test(value)) return res.status(404).send('Negăsit');
+  next();
+});
+
+// Redirecționează înapoi doar către aceeași aplicație
+function safeBack(req) {
+  const ref = req.get('Referrer');
+  if (ref) {
+    try {
+      const u = new URL(ref);
+      if (u.host === req.get('Host')) return u.pathname + u.search;
+    } catch (e) { /* ignorăm */ }
+  }
+  return '/tasks';
+}
+
+// SSRF: blocăm adresele interne/private
+function isPrivateIp(ip) {
+  if (net.isIPv4(ip)) {
+    const [a, b] = ip.split('.').map(Number);
+    return a === 0 || a === 10 || a === 127 ||
+      (a === 100 && b >= 64 && b <= 127) ||
+      (a === 169 && b === 254) ||
+      (a === 172 && b >= 16 && b <= 31) ||
+      (a === 192 && b === 168);
+  }
+  const v = ip.toLowerCase();
+  return v === '::1' || v === '::' || v.startsWith('fc') || v.startsWith('fd') ||
+    v.startsWith('fe80') || v.startsWith('::ffff:');
+}
+
+// Calculator aritmetic fără eval: acceptă doar numere și + - * / % ( )
+function safeCalc(input) {
+  const s = String(input).replace(/\s+/g, '');
+  if (!s || s.length > 100 || !/^[0-9+\-*/%().]+$/.test(s)) throw new Error('Expresie invalidă');
+  let i = 0;
+  const peek = () => s[i];
+
+  function number() {
+    const m = /^\d+(\.\d+)?/.exec(s.slice(i));
+    if (!m) throw new Error('Expresie invalidă');
+    i += m[0].length;
+    return parseFloat(m[0]);
+  }
+  function factor() {
+    if (peek() === '-') { i++; return -factor(); }
+    if (peek() === '+') { i++; return factor(); }
+    if (peek() === '(') {
+      i++;
+      const v = expr();
+      if (peek() !== ')') throw new Error('Expresie invalidă');
+      i++;
+      return v;
+    }
+    return number();
+  }
+  function term() {
+    let v = factor();
+    while (peek() === '*' || peek() === '/' || peek() === '%') {
+      const op = s[i++];
+      const r = factor();
+      if (op === '*') v *= r;
+      else if (op === '/') {
+        if (r === 0) throw new Error('Împărțire la zero');
+        v /= r;
+      } else v %= r;
+    }
+    return v;
+  }
+  function expr() {
+    let v = term();
+    while (peek() === '+' || peek() === '-') {
+      const op = s[i++];
+      const r = term();
+      v = op === '+' ? v + r : v - r;
+    }
+    return v;
+  }
+  const result = expr();
+  if (i !== s.length) throw new Error('Expresie invalidă');
+  return result;
+}
 
 router.get('/tasks', requireLogin, (req, res) => {
-  // VULNERABILITY: SQL Injection via search query param, reflected into page too (XSS)
-  const search = req.query.q || '';
-  const query = search
-    ? `SELECT * FROM tasks WHERE user_id = ${req.session.user.id} AND title LIKE '%${search}%'`
-    : `SELECT * FROM tasks WHERE user_id = ${req.session.user.id}`;
-
-  db.all(query, (err, tasks) => {
-    if (err) return res.status(500).send('Eroare bază de date: ' + err.message);
+  const search = String(req.query.q || '');
+  const sql = search
+    ? 'SELECT * FROM tasks WHERE user_id = ? AND title LIKE ?'
+    : 'SELECT * FROM tasks WHERE user_id = ?';
+  const params = search ? [req.session.user.id, `%${search}%`] : [req.session.user.id];
+  db.all(sql, params, (err, tasks) => {
+    if (err) return dbFail(res, err);
     res.render('tasks', { tasks: tasks || [], user: req.session.user, search });
   });
 });
 
-// --- Rutele cu cale FIXĂ trebuie înregistrate ÎNAINTE de '/tasks/:id', altfel Express le
-// confundă cu un id de task (ex: 'export-all' sau 'preview-link' ar fi tratate ca id). ---
+// --- rutele cu cale fixă stau ÎNAINTE de '/tasks/:id' ---
 
-// Export pentru TOATE task-urile userului curent — funcționalitate reală, nevulnerabilă:
-// conținutul e generat din DB, nu din fișiere de pe disc.
 router.get('/tasks/export-all', requireLogin, (req, res) => {
-  db.all(`SELECT * FROM tasks WHERE user_id = ${req.session.user.id}`, (err, tasks) => {
-    if (err) return res.status(500).send('Eroare bază de date: ' + err.message);
+  db.all('SELECT * FROM tasks WHERE user_id = ?', [req.session.user.id], (err, tasks) => {
+    if (err) return dbFail(res, err);
     const content = (tasks || [])
       .map(t => `# ${t.title} [${t.status}]\n${t.description || '(fără descriere)'}`)
       .join('\n\n---\n\n');
@@ -44,60 +136,61 @@ router.get('/tasks/export-all', requireLogin, (req, res) => {
   });
 });
 
-// Șabloane predefinite de notițe (Planificare sprint / Raport de bug / Daily standup /
-// Retrospectivă) — utile când pornești un task nou, ca punct de plecare. Fișierele sunt puse
-// de aplicație în public/uploads/tasks/, nu de utilizator.
-// VULNERABILITY: path traversal — dropdown-ul din interfață trimite doar numele unui șablon
-// valid, dar handler-ul citește parametrul "file" brut din query string și îl lipește direct
-// în calea de pe disc, fără să verifice că e chiar unul din șabloanele permise. Oricine poate
-// edita manual URL-ul (care e vizibil, pentru că cererea e un simplu GET) și cere orice alt
-// fișier de pe disc. Demo: file=sprint-planning.txt (normal) vs file=../../../.env (exploit).
+// Șabloane: doar cele 4 nume permise (listă albă)
 router.get('/tasks/templates', requireLogin, (req, res) => {
-  const file = req.query.file || 'sprint-planning.txt';
-  const filePath = path.join(templatesDir, file); // no sanitization of ../../
-  fs.readFile(filePath, 'utf8', (err, data) => {
+  const file = String(req.query.file || 'sprint-planning.txt');
+  if (!TEMPLATES.includes(file)) return res.status(404).send('Șablon negăsit');
+  fs.readFile(path.join(templatesDir, file), 'utf8', (err, data) => {
     if (err) return res.status(404).send('Șablon negăsit');
     res.setHeader('Content-Type', 'text/plain; charset=utf-8');
     res.send(data);
   });
 });
 
-// VULNERABILITY: SSRF — serverul face request către orice URL primit de la client.
-// (notă: ruta trebuie să stea înaintea lui '/tasks/:id' ca să fie efectiv accesibilă —
-// înainte era "mascată" de ruta dinamică și nu se putea testa deloc)
-router.get('/tasks/preview-link', requireLogin, (req, res) => {
-  const url = req.query.url;
-  request(url, (err, response, body) => {
-    if (err) return res.status(500).send('Nu s-a putut accesa URL-ul');
-    res.send(body ? body.substring(0, 500) : '');
-  });
+// SSRF: doar http/https, adrese publice, fără redirecturi, răspuns servit ca text simplu
+router.get('/tasks/preview-link', requireLogin, async (req, res) => {
+  let url;
+  try {
+    url = new URL(String(req.query.url || ''));
+  } catch (e) {
+    return res.status(400).send('URL invalid');
+  }
+  if (!['http:', 'https:'].includes(url.protocol)) return res.status(400).send('Protocol nepermis');
+
+  try {
+    const addrs = await dns.lookup(url.hostname, { all: true });
+    if (addrs.length === 0 || addrs.some(a => isPrivateIp(a.address))) {
+      return res.status(400).send('Adresă nepermisă');
+    }
+    const response = await fetch(url, { redirect: 'manual', signal: AbortSignal.timeout(5000) });
+    const body = await response.text();
+    res.type('text/plain').send(body.substring(0, 500));
+  } catch (e) {
+    res.status(502).send('Nu s-a putut accesa URL-ul');
+  }
 });
 
-// VULNERABILITY: IDOR — no check that the task belongs to the logged-in user
+// IDOR: toate interogările verifică și proprietarul (user_id)
 router.get('/tasks/:id', requireLogin, (req, res) => {
-  db.get(`SELECT * FROM tasks WHERE id = ${req.params.id}`, (err, task) => {
-    if (!task) return res.status(404).send('Negăsit');
-    db.all(`SELECT * FROM comments WHERE task_id = ${req.params.id}`, (err2, comments) => {
+  db.get('SELECT * FROM tasks WHERE id = ? AND user_id = ?', [req.params.id, req.session.user.id], (err, task) => {
+    if (err || !task) return res.status(404).send('Negăsit');
+    db.all('SELECT * FROM comments WHERE task_id = ?', [task.id], (err2, comments) => {
       res.render('task_detail', { task, comments: comments || [], user: req.session.user });
     });
   });
 });
 
-// VULNERABILITY: IDOR — orice utilizator autentificat poate deschide formularul de editare
-// pentru orice task, indiferent de proprietar
 router.get('/tasks/:id/edit', requireLogin, (req, res) => {
-  db.get(`SELECT * FROM tasks WHERE id = ${req.params.id}`, (err, task) => {
-    if (!task) return res.status(404).send('Negăsit');
+  db.get('SELECT * FROM tasks WHERE id = ? AND user_id = ?', [req.params.id, req.session.user.id], (err, task) => {
+    if (err || !task) return res.status(404).send('Negăsit');
     res.render('task_edit', { task, user: req.session.user });
   });
 });
 
-// Export pentru UN task — funcționalitate reală, nevulnerabilă: conținutul (titlu, descriere,
-// comentarii) e generat din DB, nu citit de pe disc după un nume dat de utilizator.
 router.get('/tasks/:id/export', requireLogin, (req, res) => {
-  db.get(`SELECT * FROM tasks WHERE id = ${req.params.id}`, (err, task) => {
-    if (!task) return res.status(404).send('Negăsit');
-    db.all(`SELECT * FROM comments WHERE task_id = ${req.params.id}`, (err2, comments) => {
+  db.get('SELECT * FROM tasks WHERE id = ? AND user_id = ?', [req.params.id, req.session.user.id], (err, task) => {
+    if (err || !task) return res.status(404).send('Negăsit');
+    db.all('SELECT * FROM comments WHERE task_id = ?', [task.id], (err2, comments) => {
       const lines = [
         `Task: ${task.title}`,
         `Status: ${task.status}`,
@@ -114,69 +207,85 @@ router.get('/tasks/:id/export', requireLogin, (req, res) => {
   });
 });
 
-// VULNERABILITY: SQL Injection pe UPDATE + IDOR (nicio verificare de proprietar)
 router.post('/tasks/:id/edit', requireLogin, (req, res) => {
-  const { title, description, status } = req.body;
-  const query = `UPDATE tasks SET title = '${title}', description = '${description}', status = '${status}' WHERE id = ${req.params.id}`;
-  db.run(query, (err) => {
-    if (err) return res.status(500).send('Eroare bază de date: ' + err.message);
-    res.redirect('/tasks/' + req.params.id);
-  });
+  const title = String(req.body.title || '').trim().slice(0, 200);
+  const description = String(req.body.description || '').slice(0, 2000);
+  const status = String(req.body.status || '');
+  if (!title || !STATUSES.includes(status)) return res.status(400).send('Date invalide');
+
+  db.run('UPDATE tasks SET title = ?, description = ?, status = ? WHERE id = ? AND user_id = ?',
+    [title, description, status, req.params.id, req.session.user.id],
+    function (err) {
+      if (err) return dbFail(res, err);
+      if (this.changes === 0) return res.status(404).send('Negăsit');
+      res.redirect('/tasks/' + req.params.id);
+    });
 });
 
-// Schimbare rapidă de status (iconițele din listă) — aceeași breșă ca la editare completă:
-// VULNERABILITY: SQL Injection pe UPDATE + IDOR (nicio verificare de proprietar)
 router.post('/tasks/:id/status', requireLogin, (req, res) => {
-  const { status } = req.body;
-  const query = `UPDATE tasks SET status = '${status}' WHERE id = ${req.params.id}`;
-  db.run(query, (err) => {
-    if (err) return res.status(500).send('Eroare bază de date: ' + err.message);
-    res.redirect(req.get('Referrer') || '/tasks');
-  });
+  const status = String(req.body.status || '');
+  if (!STATUSES.includes(status)) return res.status(400).send('Status invalid');
+
+  db.run('UPDATE tasks SET status = ? WHERE id = ? AND user_id = ?',
+    [status, req.params.id, req.session.user.id],
+    function (err) {
+      if (err) return dbFail(res, err);
+      if (this.changes === 0) return res.status(404).send('Negăsit');
+      res.redirect(safeBack(req));
+    });
 });
 
 router.post('/tasks', requireLogin, (req, res) => {
-  const { title, description } = req.body;
-  // VULNERABILITY: SQL Injection on insert
-  const query = `INSERT INTO tasks (user_id, title, description) VALUES (${req.session.user.id}, '${title}', '${description}')`;
-  db.run(query, (err) => {
-    if (err) return res.status(500).send('Eroare bază de date: ' + err.message);
-    res.redirect('/tasks');
-  });
+  const title = String(req.body.title || '').trim().slice(0, 200);
+  const description = String(req.body.description || '').slice(0, 2000);
+  if (!title) return res.redirect('/tasks');
+
+  db.run('INSERT INTO tasks (user_id, title, description) VALUES (?, ?, ?)',
+    [req.session.user.id, title, description],
+    (err) => {
+      if (err) return dbFail(res, err);
+      res.redirect('/tasks');
+    });
 });
 
-// VULNERABILITY: Stored XSS — comment body rendered without escaping (view uses <%- %>)
 router.post('/tasks/:id/comments', requireLogin, (req, res) => {
-  const { body } = req.body;
-  const query = `INSERT INTO comments (task_id, author, body) VALUES (${req.params.id}, '${req.session.user.email}', '${body}')`;
-  db.run(query, (err) => {
-    res.redirect('/tasks/' + req.params.id);
+  const body = String(req.body.body || '').trim().slice(0, 1000);
+  if (!body) return res.redirect('/tasks/' + req.params.id);
+
+  db.get('SELECT id FROM tasks WHERE id = ? AND user_id = ?', [req.params.id, req.session.user.id], (err, task) => {
+    if (err || !task) return res.status(404).send('Negăsit');
+    db.run('INSERT INTO comments (task_id, author, body) VALUES (?, ?, ?)',
+      [task.id, req.session.user.email, body],
+      (err2) => {
+        if (err2) return dbFail(res, err2);
+        res.redirect('/tasks/' + task.id);
+      });
   });
 });
 
-// VULNERABILITY: IDOR — orice utilizator autentificat poate șterge orice comentariu (nu doar
-// pe al lui, nu doar de pe task-urile lui), pentru că nu se verifică deloc autorul
 router.post('/tasks/:id/comments/:commentId/delete', requireLogin, (req, res) => {
-  db.run(`DELETE FROM comments WHERE id = ${req.params.commentId}`, (err) => {
-    res.redirect('/tasks/' + req.params.id);
-  });
+  db.run(
+    'DELETE FROM comments WHERE id = ? AND task_id = ? AND task_id IN (SELECT id FROM tasks WHERE user_id = ?)',
+    [req.params.commentId, req.params.id, req.session.user.id],
+    (err) => {
+      if (err) return dbFail(res, err);
+      res.redirect('/tasks/' + req.params.id);
+    });
 });
 
-// VULNERABILITY: IDOR on delete — any logged-in user can delete any task by id
 router.post('/tasks/:id/delete', requireLogin, (req, res) => {
-  db.run(`DELETE FROM tasks WHERE id = ${req.params.id}`, (err) => {
+  db.run('DELETE FROM tasks WHERE id = ? AND user_id = ?', [req.params.id, req.session.user.id], function (err) {
+    if (err) return dbFail(res, err);
+    if (this.changes > 0) db.run('DELETE FROM comments WHERE task_id = ?', [req.params.id]);
     res.redirect('/tasks');
   });
 });
 
-// VULNERABILITY: "formula" helper for due-date math uses eval() on user input (RCE-ish)
 router.post('/tasks/calc', requireLogin, (req, res) => {
-  const { expression } = req.body;
   try {
-    const result = eval(expression); // e.g. require('child_process').execSync('id')
-    res.json({ result });
+    res.json({ result: safeCalc(req.body.expression) });
   } catch (e) {
-    res.json({ error: e.message });
+    res.status(400).json({ error: 'Expresie invalidă' });
   }
 });
 

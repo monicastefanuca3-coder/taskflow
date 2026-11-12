@@ -18,7 +18,7 @@
           <div class="user-chip">
             <div class="avatar-xl" id="avatarBox">
               <img src="<%= user.avatar %>?v=<%= Date.now() %>" alt="Avatar"
-                   onerror="this.replaceWith(Object.assign(document.createElement('span'),{textContent:'<%= user.email.charAt(0) %>'}))">
+                   data-fallback="<%= user.email.charAt(0) %>">
             </div>
             <div class="user-chip-text">
               <div class="user-chip-email" style="font-size:15px;"><%= user.email %></div>
@@ -30,17 +30,15 @@
         <div class="card" style="margin-bottom:20px;">
           <h3 style="margin-top:0;">Schimbă avatar</h3>
           <form method="POST" action="/profile/avatar" enctype="multipart/form-data">
-            <label>Nume fișier (opțional)</label>
-            <input type="text" name="filename" placeholder="ex: avatar.png">
             <label>Fișier imagine</label>
             <input type="file" name="avatar" required>
             <button type="submit">Încarcă</button>
           </form>
-          <p class="muted-small">Dacă lași numele gol, se păstrează numele original al fișierului.</p>
+          <p class="muted-small">Acceptate: .png, .jpg, .jpeg, .gif, maximum 2 MB. Fișierul primește un nume generat automat.</p>
         </div>
 
       </div>
     </main>
   </div>
-</body>
+<script src="/js/app.js" defer></script></body>
 </html>

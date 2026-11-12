@@ -4,6 +4,20 @@ const config = require('./config');
 
 const db = new sqlite3.Database(config.db);
 
+function hashPassword(password) {
+  const salt = crypto.randomBytes(16).toString('hex');
+  const hash = crypto.scryptSync(String(password), salt, 64).toString('hex');
+  return `${salt}:${hash}`;
+}
+
+function verifyPassword(password, stored) {
+  if (!stored || !stored.includes(':')) return false;
+  const [salt, hash] = stored.split(':');
+  const expected = Buffer.from(hash, 'hex');
+  const candidate = crypto.scryptSync(String(password), salt, expected.length);
+  return crypto.timingSafeEqual(candidate, expected);
+}
+
 function init() {
   db.serialize(() => {
     db.run(`CREATE TABLE IF NOT EXISTS users (
@@ -29,12 +43,14 @@ function init() {
       body TEXT
     )`);
 
-    // weak hashing on purpose (MD5, no salt) — SAST should flag this
-    const adminHash = crypto.createHash('md5').update('Admin123!').digest('hex');
+    const adminHash = hashPassword('Admin123!');
+    const demoHash = hashPassword('password123');
     db.run(`INSERT OR IGNORE INTO users (id, email, password, role) VALUES (1, 'admin@taskflow.local', ?, 'admin')`, [adminHash]);
-
-    const demoHash = crypto.createHash('md5').update('password123').digest('hex');
     db.run(`INSERT OR IGNORE INTO users (id, email, password, role) VALUES (2, 'demo@taskflow.local', ?, 'user')`, [demoHash]);
+
+    // migrare: dacă baza de date există deja cu hash-uri MD5 vechi, le înlocuim pentru conturile seed
+    db.run(`UPDATE users SET password = ? WHERE id = 1 AND password NOT LIKE '%:%'`, [adminHash]);
+    db.run(`UPDATE users SET password = ? WHERE id = 2 AND password NOT LIKE '%:%'`, [demoHash]);
 
     db.run(`INSERT OR IGNORE INTO tasks (id, user_id, title, description, status) VALUES
       (1, 2, 'Welcome to TaskFlow', 'This is your first task. Edit or delete it.', 'open'),
@@ -42,4 +58,4 @@ function init() {
   });
 }
 
-module.exports = { db, init };
+module.exports = { db, init, hashPassword, verifyPassword };

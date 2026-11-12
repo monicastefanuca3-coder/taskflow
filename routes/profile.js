@@ -2,35 +2,50 @@ const express = require('express');
 const router = express.Router();
 const multer = require('multer');
 const crypto = require('crypto');
-const _ = require('lodash');
-const { exec } = require('child_process');
-const { db } = require('../db');
+const path = require('path');
+const { execFile } = require('child_process');
+const { db, hashPassword } = require('../db');
 const config = require('../config');
+
+const ROLES = ['user', 'admin'];
+const AVATAR_EXT = ['.png', '.jpg', '.jpeg', '.gif'];
+const CONVERT_FORMATS = ['png', 'jpg', 'jpeg', 'gif'];
 
 function requireLogin(req, res, next) {
   if (!req.session.user) return res.redirect('/login');
   next();
 }
 
-// FIX: verificare reală de rol pentru panoul admin — înainte lipsea complet (Broken Access
-// Control), acum orice rută /admin/* cere explicit rol 'admin' pe server, nu doar ascunderea
-// linkului în interfață.
 function requireAdmin(req, res, next) {
   if (!req.session.user) return res.redirect('/login');
   if (req.session.user.role !== 'admin') return res.status(403).send('Acces interzis — ai nevoie de rol de administrator.');
   next();
 }
 
-// VULNERABILITY: no file-type/extension validation, filename taken from user input -> path traversal
+router.param('id', (req, res, next, value) => {
+  if (!/^\d+$/.test(value)) return res.status(404).send('Negăsit');
+  next();
+});
+
+// Avatar: extensie din listă albă, nume generat de server (nu mai vine din input), limită de dimensiune
 const storage = multer.diskStorage({
   destination: (req, file, cb) => cb(null, config.uploadsDir),
-  filename: (req, file, cb) => cb(null, req.body.filename || file.originalname)
+  filename: (req, file, cb) => {
+    const ext = path.extname(file.originalname).toLowerCase();
+    cb(null, crypto.randomUUID() + ext);
+  }
 });
-const upload = multer({ storage });
+const upload = multer({
+  storage,
+  limits: { fileSize: 2 * 1024 * 1024 },
+  fileFilter: (req, file, cb) => {
+    const ext = path.extname(file.originalname).toLowerCase();
+    cb(null, AVATAR_EXT.includes(ext));
+  }
+});
 
 router.get('/profile', requireLogin, (req, res) => {
-  // sesiunea ține doar id/email/role; avatarul curent îl luăm din DB ca să fie mereu la zi
-  db.get(`SELECT avatar FROM users WHERE id = ${req.session.user.id}`, (err, row) => {
+  db.get('SELECT avatar FROM users WHERE id = ?', [req.session.user.id], (err, row) => {
     const avatar = (row && row.avatar) || '/uploads/default.png';
     res.render('profile', { user: Object.assign({}, req.session.user, { avatar }) });
   });
@@ -38,61 +53,80 @@ router.get('/profile', requireLogin, (req, res) => {
 
 router.post('/profile/avatar', requireLogin, upload.single('avatar'), (req, res) => {
   if (!req.file) return res.redirect('/profile');
-  const avatarPath = '/uploads/' + (req.body.filename || req.file.originalname);
-  db.run(`UPDATE users SET avatar = '${avatarPath}' WHERE id = ${req.session.user.id}`, (err) => {
-    req.session.user.avatar = avatarPath; // altfel pagina redirecționată tot arată avatarul vechi
+  const avatarPath = '/uploads/' + req.file.filename;
+  db.run('UPDATE users SET avatar = ? WHERE id = ?', [avatarPath, req.session.user.id], (err) => {
+    if (err) console.error(err);
+    req.session.user.avatar = avatarPath;
     res.redirect('/profile');
   });
 });
 
-// VULNERABILITY: Prototype Pollution — merge nesigur al JSON-ului trimis de client peste un
-// obiect intern, folosind lodash.merge (exploatabil pe lodash@4.17.4, vezi CVE-2018-16487 / CVE-2019-10744)
-// Exploit: POST JSON {"__proto__":{"polluted":"da"}} -> poluează Object.prototype pentru tot procesul
+// Preferințe: se acceptă doar câmpurile cunoscute, cu valori validate (fără merge peste input)
 router.post('/profile/preferences', requireLogin, (req, res) => {
-  const defaults = { theme: 'light', notifications: true };
-  const merged = _.merge(defaults, req.body);
-  res.json({ preferences: merged });
+  const body = req.body || {};
+  const preferences = { theme: 'light', notifications: true };
+  if (body.theme === 'light' || body.theme === 'dark') preferences.theme = body.theme;
+  if (typeof body.notifications === 'boolean') preferences.notifications = body.notifications;
+  res.json({ preferences });
 });
 
-// VULNERABILITY: command injection — shells out using unsanitized user input
+// Conversie avatar: fără shell (execFile), format și nume de fișier validate
 router.get('/profile/convert-avatar', requireLogin, (req, res) => {
-  const format = req.query.format || 'png';
-  const avatarFile = req.query.file || 'default.png';
-  exec(`convert ${config.uploadsDir}/${avatarFile} ${config.uploadsDir}/converted.${format}`, (err, stdout, stderr) => {
-    if (err) return res.status(500).send('Conversie eșuată: ' + stderr);
+  const format = String(req.query.format || 'png');
+  const avatarFile = path.basename(String(req.query.file || 'default.png'));
+  if (!CONVERT_FORMATS.includes(format)) return res.status(400).send('Format invalid');
+  if (!/^\w[\w.-]*$/.test(avatarFile)) return res.status(400).send('Nume de fișier invalid');
+
+  const src = path.join(config.uploadsDir, avatarFile);
+  const dest = path.join(config.uploadsDir, `converted.${format}`);
+  execFile('convert', [src, dest], (err) => {
+    if (err) {
+      console.error(err);
+      return res.status(500).send('Conversie eșuată');
+    }
     res.send('Convertit');
   });
 });
 
 router.get('/admin/users', requireAdmin, (req, res) => {
-  db.all(`SELECT id, email, role, password FROM users`, (err, users) => {
+  db.all('SELECT id, email, role FROM users', (err, users) => {
     res.render('admin_users', { users: users || [], user: req.session.user });
   });
 });
 
 router.post('/admin/users/:id/role', requireAdmin, (req, res) => {
-  const role = req.body.role;
-  db.run(`UPDATE users SET role = '${role}' WHERE id = ${req.params.id}`, (err) => {
+  const role = String(req.body.role || '');
+  if (!ROLES.includes(role)) return res.status(400).send('Rol invalid');
+  db.run('UPDATE users SET role = ? WHERE id = ?', [role, req.params.id], (err) => {
+    if (err) console.error(err);
     res.redirect('/admin/users');
   });
 });
 
-// VULNERABILITY: SQL Injection pe INSERT (rămâne — doar accesul e acum verificat, nu și query-ul)
 router.post('/admin/users', requireAdmin, (req, res) => {
-  const { email, password, role } = req.body;
-  const hash = crypto.createHash('md5').update(password || '').digest('hex');
-  const userRole = role || 'user';
-  const query = `INSERT INTO users (email, password, role) VALUES ('${email}', '${hash}', '${userRole}')`;
-  db.run(query, (err) => {
-    if (err) return res.status(500).send('Eroare bază de date: ' + err.message);
-    res.redirect('/admin/users');
-  });
+  const email = String(req.body.email || '').trim();
+  const password = String(req.body.password || '');
+  const role = ROLES.includes(req.body.role) ? req.body.role : 'user';
+  if (email.length > 254 || !email.includes('@') || password.length < 8) {
+    return res.status(400).send('Date invalide (email sau parolă prea scurtă)');
+  }
+  db.run('INSERT INTO users (email, password, role) VALUES (?, ?, ?)',
+    [email, hashPassword(password), role],
+    (err) => {
+      if (err) {
+        console.error(err);
+        return res.status(400).send('Nu s-a putut crea utilizatorul');
+      }
+      res.redirect('/admin/users');
+    });
 });
 
-// VULNERABILITY: SQL Injection pe DELETE + IDOR pe id (orice admin poate șterge orice id,
-// inclusiv alt admin) — rămâne; doar accesul la rută e acum restricționat la admini
 router.post('/admin/users/:id/delete', requireAdmin, (req, res) => {
-  db.run(`DELETE FROM users WHERE id = ${req.params.id}`, (err) => {
+  if (Number(req.params.id) === req.session.user.id) {
+    return res.status(400).send('Nu îți poți șterge propriul cont');
+  }
+  db.run('DELETE FROM users WHERE id = ?', [req.params.id], (err) => {
+    if (err) console.error(err);
     res.redirect('/admin/users');
   });
 });

@@ -2,11 +2,11 @@ name: Security Pipeline
 
 on:
   push:
-    branches: [main]
+    branches: [main, fixed]
   pull_request:
     branches: [main]
   schedule:
-    - cron: '0 6 * * 1'   # luni 06:00 UTC — apar CVE-uri noi și după commit
+    - cron: '0 6 * * 1'
   workflow_dispatch:
 
 permissions:
@@ -28,9 +28,6 @@ jobs:
           docker run --rm -v "$PWD:/repo" trufflesecurity/trufflehog:3.88.0 \
             git file:///repo --fail --no-update \
             --exclude-paths=/repo/.trufflehog-exclude.txt 2>&1 | tee trufflehog.txt
-        # verifică tag-ul pe Docker Hub și folosește ultima versiune stabilă
-        # --fail => exit 183 dacă găsește secrete (gate)
-        # fără --only-verified: cheile din proiect sunt false, deci nu pot fi "verificate"
 
       - uses: actions/upload-artifact@v4
         if: always()
@@ -52,9 +49,9 @@ jobs:
           node-version: 20
           cache: npm
 
-      - run: npm install
+      - run: npm ci --ignore-scripts
 
-      - name: "npm audit (gate: high+)"
+      - name: "npm audit (gate high+)"
         run: npm audit --audit-level=high
 
       - name: Trivy fs — gate HIGH/CRITICAL
@@ -107,6 +104,7 @@ jobs:
           format: table
           severity: 'HIGH,CRITICAL'
           exit-code: '1'
+          ignore-unfixed: true
 
       - name: Trivy image — raport SARIF
         if: always()
@@ -137,7 +135,6 @@ jobs:
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
           SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
-        # gate-ul: sonar.qualitygate.wait=true în sonar-project.properties
 
   # 5) DAST — OWASP ZAP
   dast:

@@ -2,6 +2,7 @@ require('dotenv').config();
 const express = require('express');
 const bodyParser = require('body-parser');
 const cookieSession = require('cookie-session');
+const helmet = require('helmet');
 const path = require('path');
 
 const config = require('./config');
@@ -17,29 +18,50 @@ init();
 app.set('view engine', 'ejs');
 app.set('views', path.join(__dirname, 'views'));
 
-app.use(bodyParser.urlencoded({ extended: true }));
-app.use(bodyParser.json());
-app.use(express.static(path.join(__dirname, 'public')));
-
-// VULNERABILITY: wide-open CORS — any origin can call the API with credentials
+// Headere de securitate (CSP, X-Frame-Options, X-Content-Type-Options etc.)
+app.disable('x-powered-by');
+app.use(helmet({
+  contentSecurityPolicy: {
+    useDefaults: true,
+    directives: { 'upgrade-insecure-requests': null } // aplicația rulează pe HTTP în demo
+  },
+  // 'same-origin' (nu 'no-referrer'), altfel browserul trimite "Origin: null" la formulare
+  referrerPolicy: { policy: 'same-origin' }
+}));
 app.use((req, res, next) => {
-  res.header('Access-Control-Allow-Origin', req.headers.origin || '*');
-  res.header('Access-Control-Allow-Credentials', 'true');
-  res.header('Access-Control-Allow-Methods', 'GET,POST,PUT,DELETE,OPTIONS');
-  res.header('Access-Control-Allow-Headers', '*');
+  res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
   next();
 });
 
-// VULNERABILITY: session cookie not Secure/HttpOnly/SameSite-strict, weak secret
+app.use(bodyParser.urlencoded({ extended: false }));
+app.use(bodyParser.json());
+
+// Cookie de sesiune: HttpOnly, SameSite=Lax, Secure în producție
 app.use(cookieSession({
   name: 'tf_session',
   secret: config.sessionSecret,
-  httpOnly: false
+  httpOnly: true,
+  sameSite: 'lax',
+  secure: process.env.NODE_ENV === 'production',
+  maxAge: 24 * 60 * 60 * 1000
 }));
 
-// VULNERABILITY: no CSRF protection anywhere (no csurf/token on any POST form)
-// VULNERABILITY: no helmet() -> missing CSP, X-Frame-Options, X-Content-Type-Options, HSTS etc.
-// VULNERABILITY: no rate limiting on login/register/search
+// CSRF: cererile care modifică starea trebuie să vină de pe același host (Origin/Referer)
+app.use((req, res, next) => {
+  if (['GET', 'HEAD', 'OPTIONS'].includes(req.method)) return next();
+  const source = req.get('Origin') || req.get('Referer');
+  if (!source) return res.status(403).send('Cerere respinsă');
+  try {
+    if (new URL(source).host !== req.get('Host')) return res.status(403).send('Cerere respinsă');
+  } catch (e) {
+    return res.status(403).send('Cerere respinsă');
+  }
+  next();
+});
+
+app.use(express.static(path.join(__dirname, 'public')));
+
+// CORS eliminat: aplicația folosește doar cereri de același origin
 
 app.get('/', (req, res) => res.redirect(req.session.user ? '/tasks' : '/login'));
 
@@ -47,20 +69,11 @@ app.use(authRoutes);
 app.use(taskRoutes);
 app.use(profileRoutes);
 
-// health check that leaks version/debug info
-app.get('/health', (req, res) => {
-  res.json({
-    status: 'ok',
-    node: process.version,
-    env: process.env.NODE_ENV,
-    uptime: process.uptime()
-  });
-});
+app.get('/health', (req, res) => res.json({ status: 'ok' }));
 
-// VULNERABILITY: verbose error handler — stack traces returned to the client
 app.use((err, req, res, next) => {
   console.error(err);
-  res.status(500).send('<pre>' + err.stack + '</pre>');
+  res.status(500).send('Eroare internă. Încearcă din nou mai târziu.');
 });
 
 app.listen(config.port, () => {

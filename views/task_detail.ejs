@@ -30,13 +30,12 @@
           <div class="empty-state">Niciun comentariu încă.</div>
         <% } else { %>
           <% comments.forEach(function(c) { %>
-            <!-- notă: body-ul comentariului e redat intenționat neescapat (demo XSS stocat) -->
             <div class="comment row-between" style="align-items:flex-start;">
               <div>
                 <span class="comment-author"><%= c.author %></span>
-                <span class="comment-body"><%- c.body %></span>
+                <span class="comment-body"><%= c.body %></span>
               </div>
-              <form method="POST" action="/tasks/<%= task.id %>/comments/<%= c.id %>/delete" onsubmit="return confirm('Ștergi acest comentariu?');">
+              <form method="POST" action="/tasks/<%= task.id %>/comments/<%= c.id %>/delete" data-confirm="Ștergi acest comentariu?">
                 <button type="submit" class="ghost small" title="Șterge comentariul" style="color:var(--danger); padding:2px 8px;">✕</button>
               </form>
             </div>
@@ -55,5 +54,5 @@
       </div>
     </main>
   </div>
-</body>
+<script src="/js/app.js" defer></script></body>
 </html>
