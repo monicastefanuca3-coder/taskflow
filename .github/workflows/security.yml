@@ -26,7 +26,8 @@ jobs:
         shell: bash
         run: |
           docker run --rm -v "$PWD:/repo" trufflesecurity/trufflehog:3.88.0 \
-            git file:///repo --fail --no-update 2>&1 | tee trufflehog.txt
+            git file:///repo --fail --no-update --redact \
+            --exclude-paths=/repo/.trufflehog-exclude.txt 2>&1 | tee trufflehog.txt
         # verifică tag-ul pe Docker Hub și folosește ultima versiune stabilă
         # --fail => exit 183 dacă găsește secrete (gate)
         # fără --only-verified: cheile din proiect sunt false, deci nu pot fi "verificate"
@@ -57,7 +58,7 @@ jobs:
         run: npm audit --audit-level=high
 
       - name: Trivy fs — gate HIGH/CRITICAL
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@0.35.0
         with:
           scan-type: fs
           scan-ref: .
@@ -69,7 +70,7 @@ jobs:
 
       - name: Trivy fs — raport SARIF
         if: always()
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@0.35.0
         with:
           scan-type: fs
           scan-ref: .
@@ -99,7 +100,7 @@ jobs:
         run: docker build -t taskflow:scan .
 
       - name: Trivy image — gate HIGH/CRITICAL
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@0.35.0
         with:
           image-ref: taskflow:scan
           format: table
@@ -108,7 +109,7 @@ jobs:
 
       - name: Trivy image — raport SARIF
         if: always()
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@0.35.0
         with:
           image-ref: taskflow:scan
           format: sarif
