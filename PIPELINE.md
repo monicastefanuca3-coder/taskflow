@@ -1,10 +1,8 @@
 # Pipeline de securitate — SAST, DAST, SCA, secret scanning
 
-Două variante echivalente, gata de folosit:
-- **GitHub Actions** → `.github/workflows/security.yml`
-- **GitLab CI** → `.gitlab-ci.yml`
+Pipeline-ul rulează pe **GitHub Actions** (`.github/workflows/security.yml`) și execută 5 etape pe aplicația TaskFlow:
 
-Ambele rulează aceleași 5 etape pe aplicația TaskFlow:
+Rulează aceleași 5 etape pe aplicația TaskFlow:
 
 | Etapă | Unealtă | Ce scanează |
 |---|---|---|
@@ -26,10 +24,6 @@ Trebuie un server SonarQube (propriu, sau gratuit pe [SonarCloud](https://sonarc
 - `SONAR_TOKEN` — tokenul generat din SonarQube/SonarCloud
 - `SONAR_HOST_URL` — ex: `https://sonarcloud.io` sau URL-ul serverului propriu
 
-**GitLab CI** → Settings → CI/CD → Variables → adaugă aceleași două, cu „Protect variable" debifat dacă testezi pe branch-uri neprotejate.
-
-Fără aceste două variabile, job-ul `sast` eșuează cu eroare de autentificare — restul pipeline-ului (secret scan, SCA, DAST) rulează normal, independent de Sonar.
-
 ### Restul etapelor
 Nu cer nimic suplimentar — rulează din prima pe un runner standard (`ubuntu-latest` / Docker executor cu `docker:24.0-dind` pentru GitLab).
 
@@ -41,16 +35,16 @@ Rulează-le pe rând din rădăcina proiectului, ca să vezi rezultatele înaint
 
 ```bash
 # 1) Secret scanning
-docker run --rm -v "$(pwd):/repo" trufflesecurity/trufflehog:latest filesystem /repo
+docker run --rm -v "$(pwd):/repo" trufflesecurity/trufflehog:3.88.0 git file:///repo --fail --no-update --redact
 
 # 2) SCA — dependențe
 npm install
 npm audit
-docker run --rm -v "$(pwd):/repo" aquasec/trivy:latest fs --scanners vuln,secret,misconfig /repo
+docker run --rm -v "$(pwd):/repo" aquasec/trivy:0.69.3 fs --scanners vuln,secret,misconfig /repo
 
 # 3) SCA — imagine Docker
 docker build -t taskflow:scan .
-docker run --rm aquasec/trivy:latest image taskflow:scan
+docker run --rm aquasec/trivy:0.69.3 image taskflow:scan
 
 # 4) SAST — necesită un server SonarQube pornit local (sau SonarCloud)
 docker run --rm -e SONAR_HOST_URL=http://host.docker.internal:9000 -e SONAR_TOKEN=<tokenul tău> \
