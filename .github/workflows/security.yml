@@ -53,7 +53,7 @@ jobs:
 
       - run: npm install
 
-      - name: npm audit (gate: high+)
+      - name: "npm audit (gate: high+)"
         run: npm audit --audit-level=high
 
       - name: Trivy fs — gate HIGH/CRITICAL
