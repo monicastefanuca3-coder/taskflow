@@ -1,17 +1,45 @@
 name: Security Pipeline
 
+# ---------------------------------------------------------------------------
+# Pipeline de securitate pentru TaskFlow: secret scanning, SCA, SAST, DAST.
+#
+# Două moduri de rulare:
+#   demo     (implicit)  -> toate uneltele raportează, dar build-ul NU pică.
+#                           Util pentru a vedea toate vulnerabilitățile.
+#   enforce  (manual)    -> build-ul PICĂ dacă se găsesc secrete, CVE-uri
+#                           HIGH/CRITICAL, quality gate Sonar picat sau alerte ZAP.
+#                           Asta e "poarta de calitate" (quality gate) din practică.
+#
+# Pornire manuală: Actions -> Security Pipeline -> Run workflow -> alegi modul.
+# ---------------------------------------------------------------------------
+
 on:
   push:
     branches: [main]
   pull_request:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      mode:
+        description: 'demo = doar raportează | enforce = blochează build-ul la probleme'
+        type: choice
+        options:
+          - demo
+          - enforce
+        default: demo
+
+# Drepturi minime pentru GITHUB_TOKEN; joburile care au nevoie de mai mult le cer singure.
+permissions:
+  contents: read
+
+env:
+  MODE: ${{ inputs.mode || 'demo' }}
 
 jobs:
 
-  # ---------------------------------------------------------------
+  # -------------------------------------------------------------------------
   # 1) SECRET SCANNING — TruffleHog
-  # ---------------------------------------------------------------
+  # -------------------------------------------------------------------------
   secret-scan:
     name: Secret Scanning (TruffleHog)
     runs-on: ubuntu-latest
@@ -20,20 +48,38 @@ jobs:
         with:
           fetch-depth: 0   # istoricul complet, nu doar ultimul commit
 
-      - name: TruffleHog — scanează tot repo-ul
+      - name: TruffleHog — scanează repo-ul (fără node_modules)
+        shell: bash
         run: |
-          docker run --rm -v "$PWD:/repo" trufflesecurity/trufflehog:latest filesystem /repo
-        # notă: NU folosim --only-verified aici. Secretele din acest proiect (chei
-        # AWS/Stripe/SendGrid în .env și config.js) sunt false, deci TruffleHog nu le poate
-        # "verifica" live contra API-urilor reale — cu --only-verified job-ul ar ieși curat
-        # din greșeală (fals negativ). Vrem toate potrivirile, verificate sau nu.
+          set -o pipefail
+          echo 'node_modules/' > "$RUNNER_TEMP/th-exclude.txt"
+          FAIL_FLAG=""
+          if [ "$MODE" = "enforce" ]; then FAIL_FLAG="--fail"; fi
+          # Fără --only-verified: cheile din demo sunt false, deci nu pot fi "verificate"
+          # live, iar cu acest flag job-ul ar ieși curat din greșeală (fals negativ).
+          docker run --rm \
+            -v "$PWD:/repo" \
+            -v "$RUNNER_TEMP/th-exclude.txt:/exclude.txt:ro" \
+            trufflesecurity/trufflehog:latest \
+            filesystem /repo --no-update --exclude-paths=/exclude.txt $FAIL_FLAG \
+            2>&1 | tee trufflehog-report.txt
 
-  # ---------------------------------------------------------------
+      - name: Salvează raportul
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: raport-trufflehog
+          path: trufflehog-report.txt
+
+  # -------------------------------------------------------------------------
   # 2) SCA — dependențe (npm audit + Trivy filesystem)
-  # ---------------------------------------------------------------
+  # -------------------------------------------------------------------------
   sca-dependencies:
     name: SCA — Dependențe (npm audit + Trivy)
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write   # necesar pentru încărcarea SARIF în tab-ul Security
     steps:
       - uses: actions/checkout@v4
 
@@ -42,46 +88,115 @@ jobs:
           node-version: 18
           cache: npm
 
-      - name: Instalează dependențele (generează package-lock.json)
+      - name: Instalează dependențele
         run: npm install
 
       - name: npm audit
-        run: npm audit --audit-level=low || true
-        # || true: nu blocăm pipeline-ul pe acest job-demo; într-un proiect real ai seta
-        # un prag strict (ex: fail pe severitate high/critical) ca poartă de calitate reală.
+        shell: bash
+        run: |
+          npm audit --json > npm-audit.json || true
+          if [ "$MODE" = "enforce" ]; then
+            npm audit --audit-level=high
+          else
+            npm audit || true
+          fi
 
-      - name: Trivy — scanare filesystem (dependențe + secrete + fișiere de configurare)
-        uses: aquasecurity/trivy-action@master
+      - name: Trivy — raport SARIF (pentru tab-ul Security)
+        shell: bash
+        run: |
+          mkdir -p "$HOME/.cache/trivy"
+          docker run --rm \
+            -v "$PWD:/project" -v "$HOME/.cache/trivy:/root/.cache/" \
+            aquasec/trivy:latest fs /project \
+            --scanners vuln,secret,misconfig --skip-dirs /project/node_modules \
+            --format sarif --output /project/trivy-fs.sarif --exit-code 0
+
+      - name: Trivy — tabel în log (și poartă de calitate în modul enforce)
+        shell: bash
+        run: |
+          EXIT=$([ "$MODE" = "enforce" ] && echo 1 || echo 0)
+          docker run --rm \
+            -v "$PWD:/project" -v "$HOME/.cache/trivy:/root/.cache/" \
+            aquasec/trivy:latest fs /project \
+            --scanners vuln,secret,misconfig --skip-dirs /project/node_modules \
+            --severity HIGH,CRITICAL --format table --exit-code "$EXIT" \
+            | tee trivy-fs.txt
+
+      - name: Încarcă SARIF în GitHub Security
+        if: always()
+        continue-on-error: true
+        uses: github/codeql-action/upload-sarif@v4
         with:
-          scan-type: fs
-          scan-ref: .
-          scanners: vuln,secret,misconfig
-          format: table
-          exit-code: '0'
+          sarif_file: trivy-fs.sarif
+          category: trivy-filesystem
 
-  # ---------------------------------------------------------------
+      - name: Salvează rapoartele
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: raport-sca-dependente
+          path: |
+            npm-audit.json
+            trivy-fs.sarif
+            trivy-fs.txt
+
+  # -------------------------------------------------------------------------
   # 3) SCA — imaginea Docker (Trivy image scan)
-  # ---------------------------------------------------------------
+  # -------------------------------------------------------------------------
   sca-container:
     name: SCA — Imagine Docker (Trivy)
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
     steps:
       - uses: actions/checkout@v4
 
       - name: Build imagine Docker
         run: docker build -t taskflow:scan .
 
-      - name: Trivy — scanare imagine
-        uses: aquasecurity/trivy-action@master
-        with:
-          image-ref: taskflow:scan
-          format: table
-          exit-code: '0'
-          severity: 'MEDIUM,HIGH,CRITICAL'
+      - name: Trivy — raport SARIF
+        shell: bash
+        run: |
+          mkdir -p "$HOME/.cache/trivy"
+          docker run --rm \
+            -v /var/run/docker.sock:/var/run/docker.sock \
+            -v "$PWD:/out" -v "$HOME/.cache/trivy:/root/.cache/" \
+            aquasec/trivy:latest image taskflow:scan \
+            --severity MEDIUM,HIGH,CRITICAL \
+            --format sarif --output /out/trivy-image.sarif --exit-code 0
 
-  # ---------------------------------------------------------------
-  # 4) SAST — SonarQube
-  # ---------------------------------------------------------------
+      - name: Trivy — tabel în log (și poartă de calitate în modul enforce)
+        shell: bash
+        run: |
+          EXIT=$([ "$MODE" = "enforce" ] && echo 1 || echo 0)
+          docker run --rm \
+            -v /var/run/docker.sock:/var/run/docker.sock \
+            -v "$HOME/.cache/trivy:/root/.cache/" \
+            aquasec/trivy:latest image taskflow:scan \
+            --severity HIGH,CRITICAL --format table --exit-code "$EXIT" \
+            | tee trivy-image.txt
+
+      - name: Încarcă SARIF în GitHub Security
+        if: always()
+        continue-on-error: true
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: trivy-image.sarif
+          category: trivy-image
+
+      - name: Salvează rapoartele
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: raport-sca-imagine
+          path: |
+            trivy-image.sarif
+            trivy-image.txt
+
+  # -------------------------------------------------------------------------
+  # 4) SAST — SonarQube / SonarCloud
+  # -------------------------------------------------------------------------
   sast:
     name: SAST (SonarQube)
     runs-on: ubuntu-latest
@@ -95,15 +210,17 @@ jobs:
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
           SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
-        # citește automat sonar-project.properties din rădăcina repo-ului.
-        # fără SONAR_TOKEN/SONAR_HOST_URL setate în Settings → Secrets, acest job eșuează —
-        # vezi PIPELINE.md pentru cum le configurezi (server propriu sau SonarCloud).
+        with:
+          # În modul enforce, pasul așteaptă verdictul Quality Gate și pică dacă e "Failed".
+          args: ${{ inputs.mode == 'enforce' && '-Dsonar.qualitygate.wait=true' || '' }}
+        # Citește automat sonar-project.properties din rădăcina repo-ului.
+        # Rezultatele se văd în dashboardul SonarCloud/SonarQube (Issues, Security Hotspots).
 
-  # ---------------------------------------------------------------
-  # 5) DAST — OWASP ZAP, rulat contra aplicației pornite efectiv
-  # ---------------------------------------------------------------
+  # -------------------------------------------------------------------------
+  # 5) DAST — OWASP ZAP full scan, autentificat, contra aplicației pornite
+  # -------------------------------------------------------------------------
   dast:
-    name: DAST (OWASP ZAP)
+    name: DAST (OWASP ZAP, scan autentificat)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -123,24 +240,73 @@ jobs:
         run: |
           nohup node server.js > app.log 2>&1 &
           npx wait-on http://localhost:3000/health --timeout 30000
-        # .env e deja în repo (intenționat, pentru demo-ul de secret scanning), deci
-        # dotenv îl încarcă automat — nu trebuie creat sau copiat nimic suplimentar aici.
+        # .env e în repo (intenționat, pentru demo-ul de secret scanning), deci
+        # dotenv îl încarcă automat.
 
-      - name: ZAP Baseline Scan
-        uses: zaproxy/action-baseline@v0.15.0
+      - name: Autentificare (cont demo) și extragere cookie de sesiune
+        shell: bash
+        run: |
+          curl -s -c cookies.txt -o /dev/null \
+            -d "email=demo@taskflow.local&password=password123" \
+            http://localhost:3000/login
+          COOKIE=$(awk '$6 ~ /^tf_session/ {printf "%s=%s;", $6, $7}' cookies.txt)
+          if [ -z "$COOKIE" ]; then
+            echo "Login eșuat: nu s-a primit cookie de sesiune"; exit 1
+          fi
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" -H "Cookie: $COOKIE" http://localhost:3000/tasks)
+          echo "Verificare /tasks cu sesiunea: HTTP $STATUS"
+          [ "$STATUS" = "200" ] || { echo "Sesiunea nu e validă"; exit 1; }
+          echo "ZAP_COOKIE=$COOKIE" >> "$GITHUB_ENV"
+
+      - name: ZAP full scan (spider + active scan, cu sesiunea injectată)
+        shell: bash
+        run: |
+          mkdir -p zap && chmod 777 zap
+          # -I: nu returna cod de eroare la avertismente (modul demo)
+          IGNORE_FLAG="-I"
+          if [ "$MODE" = "enforce" ]; then IGNORE_FLAG=""; fi
+          docker run --rm --network host -v "$PWD/zap:/zap/wrk:rw" \
+            ghcr.io/zaproxy/zaproxy:stable zap-full-scan.py \
+            -t http://localhost:3000/tasks \
+            -r zap-report.html -J zap-report.json -m 3 -T 15 $IGNORE_FLAG \
+            -z "-config replacer.full_list(0).description=auth \
+                -config replacer.full_list(0).enabled=true \
+                -config replacer.full_list(0).matchtype=REQ_HEADER \
+                -config replacer.full_list(0).matchstring=Cookie \
+                -config replacer.full_list(0).regex=false \
+                -config replacer.full_list(0).replacement=${ZAP_COOKIE}"
+
+      - name: Sumar alerte ZAP
+        if: always()
+        shell: bash
+        run: |
+          if [ -f zap/zap-report.json ]; then
+            {
+              echo "### Alerte OWASP ZAP"
+              echo ""
+              echo "| Risc | Număr alerte |"
+              echo "|---|---|"
+              echo "| High | $(jq '[.site[].alerts[] | select(.riskcode=="3")] | length' zap/zap-report.json) |"
+              echo "| Medium | $(jq '[.site[].alerts[] | select(.riskcode=="2")] | length' zap/zap-report.json) |"
+              echo "| Low | $(jq '[.site[].alerts[] | select(.riskcode=="1")] | length' zap/zap-report.json) |"
+              echo "| Informational | $(jq '[.site[].alerts[] | select(.riskcode=="0")] | length' zap/zap-report.json) |"
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Salvează rapoartele ZAP
+        if: always()
+        uses: actions/upload-artifact@v4
         with:
-          target: 'http://localhost:3000/login'
-          rules_file_name: ''
-          cmd_options: '-a'
-          allow_issue_writing: false
+          name: raport-zap
+          path: zap/
 
       - name: Afișează log-ul aplicației (debugging, dacă DAST eșuează)
         if: failure()
         run: cat app.log
 
-  # ---------------------------------------------------------------
-  # 6) Sumar — rulează după toate etapele, doar ca punct de verificare
-  # ---------------------------------------------------------------
+  # -------------------------------------------------------------------------
+  # 6) Sumar — rulează după toate etapele
+  # -------------------------------------------------------------------------
   summary:
     name: Sumar pipeline
     runs-on: ubuntu-latest
@@ -149,8 +315,14 @@ jobs:
     steps:
       - name: Afișează rezultatul fiecărei etape
         run: |
-          echo "secret-scan:      ${{ needs.secret-scan.result }}"
-          echo "sca-dependencies: ${{ needs.sca-dependencies.result }}"
-          echo "sca-container:    ${{ needs.sca-container.result }}"
-          echo "sast:             ${{ needs.sast.result }}"
-          echo "dast:             ${{ needs.dast.result }}"
+          {
+            echo "### Sumar pipeline (mod: $MODE)"
+            echo ""
+            echo "| Etapă | Unealtă | Rezultat |"
+            echo "|---|---|---|"
+            echo "| Secret scanning | TruffleHog | ${{ needs.secret-scan.result }} |"
+            echo "| SCA dependențe | npm audit + Trivy | ${{ needs.sca-dependencies.result }} |"
+            echo "| SCA imagine | Trivy | ${{ needs.sca-container.result }} |"
+            echo "| SAST | SonarQube | ${{ needs.sast.result }} |"
+            echo "| DAST | OWASP ZAP | ${{ needs.dast.result }} |"
+          } | tee -a "$GITHUB_STEP_SUMMARY"
