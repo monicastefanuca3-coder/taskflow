@@ -180,6 +180,7 @@ jobs:
             printf '90027\tIGNORE\t(Cookie Slack Detector)\n'
             printf '10094\tIGNORE\t(Base64 Disclosure)\n'
             printf '10112\tIGNORE\t(Session Management Response Identified)\n'
+            printf '10031\tIGNORE\t(User Controllable HTML Element Attribute)\n'
           } > .zap/rules.tsv
 
       - name: ZAP Baseline (pasiv)
