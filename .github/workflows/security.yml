@@ -185,7 +185,7 @@ jobs:
         with:
           target: 'http://localhost:3000/login'
           cmd_options: '-a'
-          rules_file_name: '.zap/rules.tsv'
+          rules_file_name: 'zap-rules.tsv'
           fail_action: true
           allow_issue_writing: false
           artifact_name: zap-baseline-report
@@ -196,7 +196,7 @@ jobs:
         with:
           target: 'http://localhost:3000/login'
           cmd_options: '-a -T 5'
-          rules_file_name: '.zap/rules.tsv'
+          rules_file_name: 'zap-rules.tsv'
           fail_action: true
           allow_issue_writing: false
           artifact_name: zap-full-report
