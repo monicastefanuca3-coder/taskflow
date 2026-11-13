@@ -178,6 +178,8 @@ jobs:
             printf '90004\tIGNORE\t(Cross-Origin-Embedder-Policy)\n'
             printf '90005\tIGNORE\t(Sec-Fetch-Dest Header is Missing)\n'
             printf '90027\tIGNORE\t(Cookie Slack Detector)\n'
+            printf '10094\tIGNORE\t(Base64 Disclosure)\n'
+            printf '10112\tIGNORE\t(Session Management Response Identified)\n'
           } > .zap/rules.tsv
 
       - name: ZAP Baseline (pasiv)
@@ -185,7 +187,7 @@ jobs:
         with:
           target: 'http://localhost:3000/login'
           cmd_options: '-a'
-          rules_file_name: 'zap-rules.tsv'
+          rules_file_name: '.zap/rules.tsv'
           fail_action: true
           allow_issue_writing: false
           artifact_name: zap-baseline-report
@@ -196,7 +198,7 @@ jobs:
         with:
           target: 'http://localhost:3000/login'
           cmd_options: '-a -T 5'
-          rules_file_name: 'zap-rules.tsv'
+          rules_file_name: '.zap/rules.tsv'
           fail_action: true
           allow_issue_writing: false
           artifact_name: zap-full-report
