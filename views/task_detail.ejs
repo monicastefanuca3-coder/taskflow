@@ -14,7 +14,7 @@
 
         <div class="card">
           <div class="row-between" style="align-items:flex-start;">
-            <%- include('partials/status_quick', { task: task }) %>
+            <%- include('partials/status_quick', { task: task, csrfToken: csrfToken }) %>
             <div style="display:flex; gap:8px;">
               <a href="/tasks/<%= task.id %>/export" class="btn secondary small">Exportă</a>
               <a href="/tasks/<%= task.id %>/edit" class="btn secondary small">Editează</a>
@@ -36,6 +36,7 @@
                 <span class="comment-body"><%= c.body %></span>
               </div>
               <form method="POST" action="/tasks/<%= task.id %>/comments/<%= c.id %>/delete" data-confirm="Ștergi acest comentariu?">
+<input type="hidden" name="_csrf" value="<%= csrfToken %>">
                 <button type="submit" class="ghost small" title="Șterge comentariul" style="color:var(--danger); padding:2px 8px;">✕</button>
               </form>
             </div>
@@ -44,6 +45,7 @@
 
         <div class="card" style="margin-top:18px;">
           <form method="POST" action="/tasks/<%= task.id %>/comments">
+<input type="hidden" name="_csrf" value="<%= csrfToken %>">
             <label>Adaugă un comentariu</label>
             <textarea name="body" placeholder="Scrie un comentariu..." required></textarea>
             <button type="submit">Trimite</button>

@@ -4,6 +4,7 @@ const bodyParser = require('body-parser');
 const cookieSession = require('cookie-session');
 const helmet = require('helmet');
 const path = require('path');
+const crypto = require('crypto');
 
 const config = require('./config');
 const { init } = require('./db');
@@ -33,6 +34,7 @@ app.use((req, res, next) => {
   next();
 });
 
+app.use(express.static(path.join(__dirname, 'public')));
 app.use(bodyParser.urlencoded({ extended: false }));
 app.use(bodyParser.json());
 
@@ -46,9 +48,16 @@ app.use(cookieSession({
   maxAge: 24 * 60 * 60 * 1000
 }));
 
-// CSRF: cererile care modifică starea trebuie să vină de pe același host (Origin/Referer)
+// CSRF: token sincronizat în sesiune + verificare Origin/Referer ca apărare suplimentară
+app.use((req, res, next) => {
+  if (!req.session.csrf) req.session.csrf = crypto.randomBytes(32).toString('hex');
+  res.locals.csrfToken = req.session.csrf;
+  next();
+});
+
 app.use((req, res, next) => {
   if (['GET', 'HEAD', 'OPTIONS'].includes(req.method)) return next();
+
   const source = req.get('Origin') || req.get('Referer');
   if (!source) return res.status(403).send('Cerere respinsă');
   try {
@@ -56,10 +65,20 @@ app.use((req, res, next) => {
   } catch (e) {
     return res.status(403).send('Cerere respinsă');
   }
+
+  const sent = (req.body && req.body._csrf) || req.get('x-csrf-token') || req.query._csrf;
+  const expected = req.session.csrf;
+  if (typeof sent !== 'string' || typeof expected !== 'string') {
+    return res.status(403).send('Token CSRF invalid');
+  }
+  const a = Buffer.from(sent);
+  const b = Buffer.from(expected);
+  if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) {
+    return res.status(403).send('Token CSRF invalid');
+  }
   next();
 });
 
-app.use(express.static(path.join(__dirname, 'public')));
 
 // CORS eliminat: aplicația folosește doar cereri de același origin
 

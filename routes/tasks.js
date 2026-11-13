@@ -69,7 +69,7 @@ function safeCalc(input) {
     const m = /^\d+(\.\d+)?/.exec(s.slice(i));
     if (!m) throw new Error('Expresie invalidă');
     i += m[0].length;
-    return parseFloat(m[0]);
+    return Number.parseFloat(m[0]);
   }
   function factor() {
     if (peek() === '-') { i++; return -factor(); }
@@ -164,7 +164,7 @@ router.get('/tasks/preview-link', requireLogin, async (req, res) => {
     }
     const response = await fetch(url, { redirect: 'manual', signal: AbortSignal.timeout(5000) });
     const body = await response.text();
-    res.type('text/plain').send(body.substring(0, 500));
+    res.json({ preview: body.substring(0, 500) });
   } catch (e) {
     res.status(502).send('Nu s-a putut accesa URL-ul');
   }

@@ -79,7 +79,7 @@ router.get('/profile/convert-avatar', requireLogin, (req, res) => {
 
   const src = path.join(config.uploadsDir, avatarFile);
   const dest = path.join(config.uploadsDir, `converted.${format}`);
-  execFile('convert', [src, dest], (err) => {
+  execFile('/usr/bin/convert', [src, dest], (err) => {
     if (err) {
       console.error(err);
       return res.status(500).send('Conversie eșuată');

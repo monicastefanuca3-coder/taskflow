@@ -17,6 +17,7 @@
         <div class="card" style="margin-bottom:20px;">
           <h3 style="margin-top:0;">Adaugă utilizator</h3>
           <form method="POST" action="/admin/users">
+<input type="hidden" name="_csrf" value="<%= csrfToken %>">
             <div class="field-row">
               <div>
                 <label>Email</label>
@@ -51,6 +52,7 @@
                 <td><span class="badge <%= u.role === 'admin' ? 'badge-admin' : 'badge-user' %>"><%= u.role %></span></td>
                 <td>
                   <form method="POST" action="/admin/users/<%= u.id %>/role">
+<input type="hidden" name="_csrf" value="<%= csrfToken %>">
                     <select name="role" data-autosubmit>
                       <option value="user" <%= u.role==='user' ? 'selected' : '' %>>user</option>
                       <option value="admin" <%= u.role==='admin' ? 'selected' : '' %>>admin</option>
@@ -59,6 +61,7 @@
                 </td>
                 <td>
                   <form method="POST" action="/admin/users/<%= u.id %>/delete" data-confirm="Ștergi definitiv acest utilizator?">
+<input type="hidden" name="_csrf" value="<%= csrfToken %>">
                     <button type="submit" class="danger small">Șterge</button>
                   </form>
                 </td>

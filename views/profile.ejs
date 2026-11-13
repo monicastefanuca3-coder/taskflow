@@ -29,7 +29,8 @@
 
         <div class="card" style="margin-bottom:20px;">
           <h3 style="margin-top:0;">Schimbă avatar</h3>
-          <form method="POST" action="/profile/avatar" enctype="multipart/form-data">
+          <form method="POST" action="/profile/avatar?_csrf=<%= csrfToken %>" enctype="multipart/form-data">
+<input type="hidden" name="_csrf" value="<%= csrfToken %>">
             <label>Fișier imagine</label>
             <input type="file" name="avatar" required>
             <button type="submit">Încarcă</button>

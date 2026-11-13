@@ -25,6 +25,7 @@
         <div class="card">
           <h3 style="margin-top:0;">Task nou</h3>
           <form method="POST" action="/tasks">
+<input type="hidden" name="_csrf" value="<%= csrfToken %>">
             <label>Titlu</label>
             <input type="text" name="title" placeholder="ex: Pregătește prezentarea de sprint" required>
             <label>Descriere</label>
@@ -62,7 +63,7 @@
             <% tasks.forEach(function(t) { %>
               <div class="task-row">
                 <div class="task-row-main" style="display:flex; align-items:center; gap:12px;">
-                  <%- include('partials/status_quick', { task: t }) %>
+                  <%- include('partials/status_quick', { task: t, csrfToken: csrfToken }) %>
                   <div>
                     <a href="/tasks/<%= t.id %>" class="task-row-title"><%= t.title %></a>
                     <span class="badge <%= t.status === 'done' ? 'badge-done' : (t.status === 'in-progress' ? 'badge-progress' : 'badge-open') %>"><%= t.status %></span>
@@ -72,6 +73,7 @@
                   <a href="/tasks/<%= t.id %>" class="btn secondary small">Deschide</a>
                   <a href="/tasks/<%= t.id %>/edit" class="btn secondary small">Editează</a>
                   <form method="POST" action="/tasks/<%= t.id %>/delete">
+<input type="hidden" name="_csrf" value="<%= csrfToken %>">
                     <button type="submit" class="danger small">Șterge</button>
                   </form>
                 </div>

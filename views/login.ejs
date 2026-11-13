@@ -19,6 +19,7 @@
       <% } %>
 
       <form method="POST" action="/login">
+<input type="hidden" name="_csrf" value="<%= csrfToken %>">
         <label>Email</label>
         <input type="text" name="email" placeholder="tu@companie.ro" required autofocus>
         <label>Parolă</label>
