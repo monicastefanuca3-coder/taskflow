@@ -145,6 +145,26 @@ jobs:
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
           SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
+      
+      - name: Verificare probleme de securitate pe tot codul (API)
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          EVENT_NAME: ${{ github.event_name }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          BRANCH_NAME: ${{ github.ref_name }}
+        run: |
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            SCOPE="pullRequest=$PR_NUMBER"
+          else
+            SCOPE="branch=$BRANCH_NAME"
+          fi
+          URL="https://sonarcloud.io/api/issues/search?componentKeys=monicastefanuca3-coder_taskflow&$SCOPE&impactSoftwareQualities=SECURITY&issueStatuses=OPEN,CONFIRMED&ps=1"
+          TOTAL=$(curl -fsS -u "$SONAR_TOKEN:" "$URL" | python3 -c "import sys, json; print(json.load(sys.stdin)['total'])")
+          echo "Probleme de securitate deschise pe tot codul: $TOTAL" | tee -a "$GITHUB_STEP_SUMMARY"
+          if [ "$TOTAL" -gt 0 ]; then
+            echo "Pragul de securitate pe tot codul nu este îndeplinit"
+            exit 1
+          fi
 
   # 5) DAST — OWASP ZAP
   dast:
